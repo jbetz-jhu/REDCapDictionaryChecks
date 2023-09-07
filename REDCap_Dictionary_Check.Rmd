@@ -1,0 +1,336 @@
+---
+title: "Check REDCap Data Dictionary"
+author: "Josh Betz (jbetz@jhu.edu)"
+date: "`r paste0('Compiled on ', format(Sys.time(), '%Y-%m-%d %I:%M'))`"
+output: html_document
+---
+
+```{r Report-Setup, echo = FALSE, message = FALSE}
+### User-Modifiable Parameters #################################################
+identifier_names <-
+  c("name", "address", "city", "county", "zip", "precint", "geocode",
+    "phone", "fax", "mail", "url",
+    "ssn", "social security", " id",
+    "mrn", "medical record", "beneficiary")
+
+check_validation_types <- c("email", "phone", "signature")
+
+### Begin Code #################################################################
+
+identifier_names_string <-
+  paste0(paste0("`'", identifier_names, "'`"), collapse = " ")
+
+#### library ###################################################################
+suppressWarnings({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(openssl)
+  library(knitr)
+})
+
+# File name of REDCap Dictionary - Exported with comma delimiter
+dictionary_file <-
+  "STUDY_DataDictionary_YYYY-MM-DD.csv"
+
+# Path to file
+dictionary_dir <-
+  file.path("C:", "Study", "data", "metadata", "redcap_dictionaries")
+
+dictionary_path <-
+  file.path(dictionary_dir, dictionary_file)
+
+#### knitr options #############################################################
+knitr::opts_chunk$set(
+  echo = FALSE,
+  results = "asis",
+  message = FALSE,
+  warning = TRUE
+)
+```
+
+
+```{r read-dictionary}
+if(file.exists(dictionary_path)){
+  # Dictionary contains variable name, CRF form, and descriptions
+  dictionary <- 
+    readr::read_csv(
+      file = dictionary_path,
+    ) %>% 
+    dplyr::select(
+      field = `Variable / Field Name`,
+      form = `Form Name`,
+      field_type = `Field Type`,
+      label = `Field Label`,
+      choices = `Choices, Calculations, OR Slider Labels`,
+      validation = `Text Validation Type OR Show Slider Number`,
+      validation_min = `Text Validation Min`,
+      validation_max = `Text Validation Max`,
+      identifier = `Identifier?`,
+      required = `Required Field?`
+    )
+
+  dictionary_modtime <-
+    file.info(dictionary_path)$mtime
+  
+  dictionary_result <-
+    paste0(nrow(dictionary), " rows and ", ncol(dictionary), " columns, ",
+           "last modified on ", dictionary_modtime)
+  
+  dictionary_sha256 <-
+    dictionary_path %>% file %>% sha256 %>% as.character
+  
+} else {
+  perform_export <- FALSE
+  
+  dictionary_result <-
+    paste0("could not be opened from ", documentation_dir)
+}
+
+# Drop annotation information that somehow gets in dictionary
+dictionary <-
+  dictionary %>% 
+  # Clean up \t (tabs) that are appearing in dictionary
+  dplyr::mutate(
+    dplyr::across(
+      .cols = where(fn = is.character),
+      .fns = 
+        function(x)
+          x %>% 
+          stringr::str_remove_all(
+            string = .,
+            pattern = "\t"
+          ) %>% 
+        stringr::str_remove_all(
+          string = .,
+          pattern = "\n"
+        )
+    )
+  )
+```
+
+
+
+
+--------------------------------------------------------------------------------
+
+
+## Identifier Fields {.tabset}
+
+To identify identifiers that have not been marked as identifiers, field names and field labels are flagged if they contain any of the following keywords: `r identifier_names_string`. 
+
+**This only searches for words in field names and labels indicating a field might be an identifier. Keywords do not exhaust all HIPAA Safe Harbor identifiers, and cannot identify identifiers that do not have these keywords. All fields should be reviewed to ensure that identifiers are correctly flagged to avoid accidentally exporting them.**
+
+
+
+
+### Marked Identifiers 
+
+```{r Marked-Identifier}
+dictionary %>% 
+  dplyr::filter(
+    identifier == "y"
+  ) %>% 
+  dplyr::select(
+    dplyr::all_of(
+      x = c("field", "form", "label")
+    )
+  ) %>% 
+  kable(
+    x = .,
+    caption = "Fields marked as identifiers."
+  )
+```
+
+
+
+
+### Possible Unmarked Identifiers 
+
+```{r Possible-Unmarked-Identifier}
+dictionary %>% 
+  dplyr::filter(
+    is.na(identifier),
+    (
+      stringr::str_detect(
+        string = tolower(label),
+        pattern = paste0(identifier_names, collapse = "|")
+      ) |
+        stringr::str_detect(
+          string = tolower(field),
+          pattern = paste0(identifier_names, collapse = "|")
+        ) |
+        validation %in% check_validation_types
+    )
+  ) %>% 
+  dplyr::select(
+    dplyr::all_of(
+      x = c("field", "form", "label")
+    )
+  ) %>%
+  kable(
+    x = .,
+    caption = "Fields not marked as identifiers which may be identifiers."
+  )
+```
+
+
+
+
+--------------------------------------------------------------------------------
+
+
+## Non-Identifier Unvalidated Text Fields
+
+Unvalidated text fields should not be exported by default, as there is no way to ensure they do not potentially contain sensitive information.
+
+
+
+```{r}
+dictionary %>% 
+  dplyr::filter(
+    field_type == "text",
+    is.na(validation),
+    is.na(identifier)
+  ) %>%
+  dplyr::select(
+    dplyr::all_of(
+      x = c("field", "form", "label")
+    )
+  ) %>% 
+  kable(
+    x = .,
+    caption = "Unvalidated text fields by form."
+  )
+```
+
+
+
+
+--------------------------------------------------------------------------------
+
+
+## Potentially Inconsistent Labels
+
+Values of variable labels that occur with more than one value (e.g. Labels `1 = Yes`, `0 = No` for one variable type, and `1 = Yes`, `2 = No` for another variable). When possible, it is best to avoid assigning multiple possible values to the same level of a response.
+
+```{r}
+dictionary %>% 
+  dplyr::filter(
+    !is.na(choices)
+  ) %>% 
+  dplyr::select(
+    dplyr::all_of(
+      x = c("field", "form", "label", "choices")
+    )
+  ) %>% 
+  tidyr::separate_longer_delim(
+    cols = "choices",
+    delim = " | "
+  ) %>%
+  tidyr::extract(
+    col = "choices",
+    into = c("value", "label"),
+    regex = "(\\w{1,}), (.*)"
+  ) %>% 
+  dplyr::group_by(
+    label
+  ) %>% 
+  dplyr::mutate(
+    unique_occurrences = length(unique(value))
+  ) %>%
+  dplyr::ungroup() %>% 
+  dplyr::filter(
+    unique_occurrences > 1
+  ) %>% 
+  tidyr::unite(
+    col = field_form,
+    field, form,
+    sep = ": "
+  ) %>% 
+  dplyr::group_by(
+    value, label, unique_occurrences
+  ) %>% 
+  dplyr::summarize(
+    field_form = paste0(field_form, collapse = ";   ")
+  ) %>% 
+  dplyr::arrange(
+    label, value
+  ) %>% 
+  kable(
+    x = .,
+    caption = "Identical labels with different assigned values."
+  )
+```
+
+
+
+
+--------------------------------------------------------------------------------
+
+
+## Duplicated Responses
+
+```{r}
+dictionary %>% 
+  dplyr::filter(
+    !is.na(choices)
+  ) %>% 
+  dplyr::select(
+    dplyr::all_of(
+      x = c("field", "form", "label", "choices")
+    )
+  ) %>% 
+  tidyr::separate_longer_delim(
+    cols = "choices",
+    delim = " | "
+  ) %>%
+  tidyr::extract(
+    col = "choices",
+    into = c("value", "label"),
+    regex = "(\\w{1,}), (.*)"
+  ) %>% 
+  dplyr::group_by(
+    field, label
+  ) %>% 
+  dplyr::mutate(
+    duplicates = length(value)
+  ) %>% 
+  dplyr::filter(
+    duplicates > 1
+  ) %>% 
+  knitr::kable(
+    x = .,
+    caption = "Fields with duplicate responses."
+  )
+```
+
+
+
+
+--------------------------------------------------------------------------------
+
+
+## Long Form Labels
+
+NOTE: Some statistical software have limits on variable names, typically 31 or 32 characters.
+
+```{r}
+dictionary %>% 
+  dplyr::select(
+    dplyr::all_of(
+      x = c("field", "form", "label")
+    )
+  ) %>% 
+  dplyr::filter(
+    nchar(field) >= 31
+  ) %>% 
+  dplyr::arrange(
+    desc(nchar(field))
+  ) %>% 
+  kable(
+    x = .,
+    caption = "Variables with names containing 31 or more characters."
+  )
+```
