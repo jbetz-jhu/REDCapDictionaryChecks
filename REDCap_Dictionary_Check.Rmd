@@ -37,9 +37,22 @@ dictionary_file <-
 # Path to file
 dictionary_dir <-
   file.path("C:", "Study", "data", "metadata", "redcap_dictionaries")
+  
+
 
 dictionary_path <-
   file.path(dictionary_dir, dictionary_file)
+
+if(file.exists(dictionary_path)){
+  dictionary_modtime <-
+    file.info(dictionary_path)$modtime
+  
+  dictionary_sha256 <-
+    dictionary_path %>% file %>% openssl::sha256() %>% as.character()
+  
+} else {
+  stop("Could not locate ", dictionary_path)
+}
 
 #### knitr options #############################################################
 knitr::opts_chunk$set(
@@ -109,6 +122,18 @@ dictionary <-
     )
   )
 ```
+
+
+
+
+--------------------------------------------------------------------------------
+
+## Dictionary File
+
+  - `r dictionary_file`
+    - Last modified `r dictionary_modtime`
+    - SHA256: `r dictionary_sha256`
+    - `r nrow(dictionary)` rows, `r ncol(dictionary)` columns
 
 
 
