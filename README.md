@@ -11,4 +11,4 @@ All unvalidated text fields that are not identifiers are listed: when unvalidate
 Values of variable labels that occur with more than one value (e.g. some variables where `1 = Yes` and `0 = No` and others where `1 = Yes` and `2 = No`). This can help standardize responses such as "Don't Know", "Refused", "Not applicable", "Not available", and so on.
 
 ## Duplicated Responses
-Fields which contain duplicated responses are flagged for de-duplication.
+Fields which contain exactly duplicated choices are flagged for de-duplication. For example, if a question asked about "What medications are you currently taking?" and the responses were `1 = Ibuprofen`, `2 = Acetaminophen`, `3 = Naproxen`, and `4 = Ibuprofen`, choices 1 and 4 would be flagged as exact duplicates. When a question includes many possible choices, and those choices may look very similar to one another, it may be difficult to distinguish choices that are similar in appearance from those that are exact duplicates.
